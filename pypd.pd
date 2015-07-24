@@ -1,237 +1,442 @@
-import OSC, time, random, itertools
-c = OSC.OSCClient()
-c.connect(('127.0.0.1', 10101))   # connect to PureData
-
-beat_length = 0.75
-
-class MarkovChain(object):
-	"""Generate a second-order Markov Chain"""
-
-	def __init__(self, values):
-		self.values = values
-		self.value_pairs = [(v1, v2) for v1 in xrange(len(self.values)) for v2 in xrange(len(self.values))]
-		# print self.value_pairs
-		self.probabilities = dict()
-		self.ultimate = random.choice(xrange(len(self.values)))
-		self.penultimate = random.choice(xrange(len(self.values)))
-		for value_pair in self.value_pairs:
-			value_probabilities = []
-			total_probability = 1.0
-			for i in xrange(len(self.values) - 2):
-				next = random.uniform(0,total_probability)
-				value_probabilities.append(next)
-				total_probability -= next
-			value_probabilities.append(1-sum(value_probabilities))
-			value_probabilities = [0.0] + value_probabilities + [1.0]
-			self.probabilities[value_pair] = sorted(value_probabilities)
-		self.initialization_time = time.time()
-				
-		# print self.probabilities
-
-	def getNext(self):
-		probabilities = self.probabilities[(self.penultimate, self.ultimate)]
-		test = random.random()
-		for e, probability in enumerate(probabilities[:-1]):
-			if test > probability and test < probabilities[e+1]:
-				next = self.values[e]
-				self.penultimate = self.ultimate
-				self.ultimate = e
-				return self.values[self.ultimate]
-
-class ParametersSet(object):
-	"""Set and change a set of parameters"""
-
-	def __init__(self, paramset, OSCID, OSCsuffix):
-		self.set = paramset
-		self.used_params = []
-		self.OSCID = OSCID
-		self.OSCsuffix = OSCsuffix
-		self.oscmessage = OSC.OSCMessage()
-		self.oscmessage.setAddress("/%s/%s" % (OSCID, OSCsuffix))
-
-	def resetUsedParams(self):
-		self.used_params = []
-
-	def chooseSetIndex(self):
-		self.setindex = random.randint(0,len(self.set)-1)
-		self.old_param = self.set[self.setindex]
-
-	def setNewParam(self):
-		self.set[self.setindex] = self.new_param
-
-	def chooseNewParam(self):
-		pass
-
-	def testAllParamsUsed(self):
-		if sorted(self.set) == sorted(list(set(self.used_params))):
-			self.chooseSetIndex()
-			self.chooseNewParam()
-			self.setNewParam()
-			self.resetUsedParams()
-
-	def chooseAndSendParam(self):
-		param = random.choice(self.set)
-		self.used_params.append(param)
-		self.oscmessage.clearData()
-		self.oscmessage.append(param)
-
-
-
-class FrequencySet(ParametersSet):
-	"""Child change function for frequencies"""
-
-
-	def chooseNewParam(self):
-		move = random.randint(2,10)
-		polarity = random.randint(0,1)
-		polarity = (polarity*2)-1
-		self.new_param = old_freq*move/(move + polarity)
-
-class AmplitudeSet(ParametersSet):
-	"""Child change function for amplitudes"""
-
-	def chooseNewParam(self):
-		self.new_param = abs(1.0 - 2.0*random.random())
-
-
-class Voice(object):
-	"""A voice to send out via OSC"""
-	instances = []
-        
-
-	def __init__(self, freqs, lengths, shapes, pans, name, factor ):
-		self.name = name
-		self.freqs = MarkovChain([factor*freq for freq in freq_base][:freqs])
-		self.lengths = MarkovChain([length*beat_length for length in lengths])
-		self.shapes = MarkovChain(shapes)
-		self.pans = MarkovChain(pans)
-		self.factor = factor
-		self.last_notes = [random.choice(self.freqs.values), random.choice(self.freqs.values)]
-		self.last_lengths = [random.choice(self.lengths.values), random.choice(self.lengths.values)]
-		self.modulation_triggers = dict()
-		for (trigger_type, source) in [('note', self.freqs.values), ('length', self.lengths.values)]:
-			self.setModulationTriggers(trigger_type, source)
-		# self.note_modulation_trigger = [random.choice(self.freqs.values), random.choice(self.freqs.values)]
-		self.next_note = time.time()
-		Voice.instances.append(self)
-
-	def setModulationTriggers(self, name, source):
-		# print source
-		self.modulation_triggers[name] = [random.choice(source), random.choice(source)]
-
-	def setAddress(self, subadd):
-		self.oscmsg = OSC.OSCMessage()
-		self.oscmsg.setAddress("/%s/%s" % (self.name, subadd))
-
-	def sendMsg(self, subadd, msg):
-		self.setAddress(subadd)
-		self.oscmsg.append(msg)
-		c.send(self.oscmsg)
-
-	def rotateNotes(self):
-		print "***BEFORE*** %s" % self.freqs.values
-		number_to_rotate = max(random.choice(xrange(len(self.freqs.values) - 2)) + 1, 1)
-		self.freqs.values = self.freqs.values[:-1*number_to_rotate] + [self.factor*random.choice(freq_base) for i in xrange(number_to_rotate)]
-		self.setModulationTriggers('note', self.freqs.values)
-		print "***MODULATE NOTES*** %s: %s" % (self.name, self.freqs.values)
-		base_freq_to_change = random.choice(xrange(len(freq_base)))
-		freq_base[base_freq_to_change] = freq_base[base_freq_to_change]*random.choice(freq_base)/random.choice(freq_base)
-
-	def rotateLengths(self):
-		number_to_rotate = max(random.choice(xrange(len(self.lengths.values) - 2)) + 1, 1)
-		self.lengths.values = self.lengths.values[:-1*number_to_rotate] + [float(random.randint(2,4)*random.choice(self.lengths.values))/float(random.randint(2,4)) for i in xrange(number_to_rotate)]
-		self.setModulationTriggers('length', self.lengths.values)
-		print "***MODULATE LENGTH*** %s: %s" % (self.name, self.lengths.values)
-
-	def rotateShapes(self):
-		# self.shapes.values = self.shapes.values[:-1] + 
-		pass
-
-	def rotatePans(self):
-		self.pans.values = self.pans.values[:-1] + [random.random()]
-		print "***MODULATE***"
-
-	def play(self):
-		now = time.time()
-		if now > self.next_note:
-			note_parts = [self.freqs, self.lengths, self.shapes, self.pans]
-			note = [note_part.getNext() for note_part in note_parts]
-			# print bass_note[0]
-			self.sendMsg("freq", note[0])
-			self.sendMsg("shape", note[2])
-			self.sendMsg("pans", note[3])
-			self.next_note += note[1]
-			self.last_notes[0] = self.last_notes[1]
-			self.last_notes[1] = note[0]
-			self.last_lengths[0] = self.last_lengths[1]
-			self.last_lengths[1] = note[1]
-			# print self.last_notes, self.note_modulation_trigger, self.last_notes == self.note_modulation_trigger
-			if self.last_notes == self.modulation_triggers['note']:
-				self.rotateNotes()
-			if self.last_lengths == self.modulation_triggers['length']:
-				self.rotateLengths()
-
-freq_base = [82.407*factor/divisor for factor in [float(f) for f in xrange(5)] for divisor  in [float(d) for d in xrange(5)] if divisor > 0 and ((factor/divisor >= 1 and factor/divisor <= 4) or factor)]
-print len(freq_base) 
-
-bass_voice = Voice(
-	freqs = 8,
-	lengths = [1.0, 0.5, 0.25],
-	pans = [0.4,0.45,0.5,0.55,0.6],
-	shapes = ['square','tri','sine'], 
-	name = "bass",
-	factor = 1.0
-	)
-
-bass_voice2 = Voice(
-	freqs = 4,
-	lengths = [2.0, 1.5, 1.0f],
-	pans = [0.4,0.45,0.5,0.55,0.6],
-	shapes = ['square','tri','sine'], 
-	name = "bass2",
-	factor = 1.0
-	)
-
-random.shuffle(freq_base)
-
-mid_voice = Voice(
-	freqs = 5,
-	lengths = [1.0, 0.5, 0.25, 0.25,0.125],
-	shapes = ['square','tri','sine'],
-	pans = [0.2,0.3,0.35,0.4,0.6],
-	name = "mid",
-	factor = 4.0)
-
-random.shuffle(freq_base)
-
-mid_voice2 = Voice(
-	freqs = 5,
-	lengths = [1.0, 0.75, 0.6, 0.25],
-	shapes = ['square','tri','sine'],
-	pans = [0.4, 0.6, 0.65, 0.7, 0.8],
-	name = "mid2",
-	factor = 3.5)
-
-random.shuffle(freq_base)
-
-mid_voice3 = Voice(
-	freqs = 7,
-	lengths = [0.8, 0.5, 0.25],
-	shapes = ['square','tri','sine'],
-	pans = [0.2, 0.21, 0.69, 0.7],
-	name = "mid3",
-	factor = 3.0)
-
-# drum_voice = Voice(
-# 	[200,100,0,0,0,0],
-# 	[1.0, 0.75, 0.5, 0.25],
-# 	['osc','noise','noise'],
-# 	"drum")
-
-# print [instance.name for instance in Voice.instances]
-
-voices = [bass_voice, bass_voice2, mid_voice, mid_voice2, mid_voice3]
-
-while True:
-	for voice in voices:
-		voice.play()
+#N canvas 74 42 1828 608 10;
+#X declare -lib mrpeach;
+#X obj 326 8 import mrpeach;
+#X obj 116 47 udpreceive 10101;
+#X obj 309 49 unpackOSC;
+#N canvas 757 531 584 408 voice 0;
+#X obj 192 211 osc~;
+#X obj 192 180 line~;
+#X msg 193 150 \$1 10;
+#X obj 192 289 *~ 0.1;
+#X obj 187 374 dac~;
+#X obj 197 119 routeOSC /freq;
+#X obj 300 118 routeOSC /shape;
+#X obj 194 252 *~;
+#X obj 254 260 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 1
+1;
+#X obj 254 226 select tri;
+#X obj 310 196 symbol;
+#X obj 324 259 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 0
+1;
+#X obj 407 259 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 1
+1;
+#X obj 256 305 line~;
+#X msg 252 280 \$1 100;
+#X obj 324 225 select sine;
+#X obj 407 225 select square;
+#X obj 331 304 line~;
+#X msg 327 279 \$1 100;
+#X obj 410 306 line~;
+#X msg 406 281 \$1 100;
+#X obj 127 251 *~;
+#X obj 79 251 *~;
+#X obj 129 192 phasor~;
+#X obj 121 221 expr~ if($v1>0 \, 1 \, 0);
+#X obj 74 194 osc~;
+#X obj 24 232 expr~ $v1*$v1;
+#X obj 193 85 routeOSC /bass;
+#X obj 199 24 receive osc;
+#X obj 430 124 routeOSC /pans;
+#X obj 430 165 expr (1-$f1);
+#X msg 425 196 \$1 10;
+#X obj 190 349 *~;
+#X obj 224 320 line~;
+#X msg 477 196 \$1 10;
+#X obj 218 349 *~;
+#X obj 288 324 line~;
+#X connect 0 0 7 0;
+#X connect 1 0 0 0;
+#X connect 1 0 23 0;
+#X connect 1 0 25 0;
+#X connect 2 0 1 0;
+#X connect 3 0 32 0;
+#X connect 3 0 35 0;
+#X connect 5 0 2 0;
+#X connect 6 0 10 0;
+#X connect 7 0 3 0;
+#X connect 8 0 14 0;
+#X connect 9 0 8 0;
+#X connect 10 0 9 0;
+#X connect 10 0 15 0;
+#X connect 10 0 16 0;
+#X connect 11 0 18 0;
+#X connect 12 0 20 0;
+#X connect 13 0 22 1;
+#X connect 14 0 13 0;
+#X connect 15 0 11 0;
+#X connect 16 0 12 0;
+#X connect 17 0 7 1;
+#X connect 18 0 17 0;
+#X connect 19 0 21 1;
+#X connect 20 0 19 0;
+#X connect 21 0 3 0;
+#X connect 22 0 3 0;
+#X connect 23 0 24 0;
+#X connect 24 0 21 0;
+#X connect 25 0 26 0;
+#X connect 26 0 22 0;
+#X connect 27 0 5 0;
+#X connect 27 0 6 0;
+#X connect 27 0 29 0;
+#X connect 28 0 27 0;
+#X connect 29 0 30 0;
+#X connect 29 0 34 0;
+#X connect 30 0 31 0;
+#X connect 31 0 33 0;
+#X connect 32 0 4 0;
+#X connect 33 0 32 1;
+#X connect 34 0 36 0;
+#X connect 35 0 4 1;
+#X connect 36 0 35 1;
+#X restore 112 170 pd voice;
+#X obj 299 94 send osc;
+#N canvas 757 531 584 408 voice 0;
+#X obj 192 211 osc~;
+#X obj 192 180 line~;
+#X msg 193 150 \$1 10;
+#X obj 192 289 *~ 0.1;
+#X obj 197 119 routeOSC /freq;
+#X obj 300 118 routeOSC /shape;
+#X obj 194 252 *~;
+#X obj 254 260 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 0
+1;
+#X obj 254 226 select tri;
+#X obj 310 196 symbol;
+#X obj 324 259 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 1
+1;
+#X obj 407 259 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 1
+1;
+#X obj 256 305 line~;
+#X msg 252 280 \$1 100;
+#X obj 324 225 select sine;
+#X obj 407 225 select square;
+#X obj 331 304 line~;
+#X msg 327 279 \$1 100;
+#X obj 410 306 line~;
+#X msg 406 281 \$1 100;
+#X obj 127 251 *~;
+#X obj 79 251 *~;
+#X obj 74 194 osc~;
+#X obj 199 24 receive osc;
+#X obj 193 85 routeOSC /mid;
+#X obj 197 384 dac~;
+#X obj 440 134 routeOSC /pans;
+#X obj 440 175 expr (1-$f1);
+#X msg 435 206 \$1 10;
+#X obj 200 359 *~;
+#X obj 234 330 line~;
+#X msg 487 206 \$1 10;
+#X obj 228 359 *~;
+#X obj 298 334 line~;
+#X obj 24 232 expr~ $v1*$v1*$v1;
+#X obj 129 192 osc~;
+#X obj 121 221 expr~ $v1*int($v1*100)/100;
+#X connect 0 0 6 0;
+#X connect 1 0 0 0;
+#X connect 1 0 22 0;
+#X connect 1 0 35 0;
+#X connect 2 0 1 0;
+#X connect 3 0 29 0;
+#X connect 3 0 32 0;
+#X connect 4 0 2 0;
+#X connect 5 0 9 0;
+#X connect 6 0 3 0;
+#X connect 7 0 13 0;
+#X connect 8 0 7 0;
+#X connect 9 0 8 0;
+#X connect 9 0 14 0;
+#X connect 9 0 15 0;
+#X connect 10 0 17 0;
+#X connect 11 0 19 0;
+#X connect 12 0 21 1;
+#X connect 13 0 12 0;
+#X connect 14 0 10 0;
+#X connect 15 0 11 0;
+#X connect 16 0 6 1;
+#X connect 17 0 16 0;
+#X connect 18 0 20 1;
+#X connect 19 0 18 0;
+#X connect 20 0 3 0;
+#X connect 21 0 3 0;
+#X connect 22 0 34 0;
+#X connect 23 0 24 0;
+#X connect 24 0 4 0;
+#X connect 24 0 5 0;
+#X connect 24 0 26 0;
+#X connect 26 0 27 0;
+#X connect 26 0 31 0;
+#X connect 27 0 28 0;
+#X connect 28 0 30 0;
+#X connect 29 0 25 0;
+#X connect 30 0 29 1;
+#X connect 31 0 33 0;
+#X connect 32 0 25 1;
+#X connect 33 0 32 1;
+#X connect 34 0 21 0;
+#X connect 35 0 36 0;
+#X connect 36 0 20 0;
+#X restore 114 200 pd voice;
+#N canvas 757 531 763 455 voice 0;
+#X obj 192 211 osc~;
+#X obj 192 180 line~;
+#X msg 193 150 \$1 10;
+#X obj 186 352 *~ 0.1;
+#X obj 197 119 routeOSC /freq;
+#X obj 300 118 routeOSC /shape;
+#X obj 193 295 *~;
+#X obj 254 260 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 0
+1;
+#X obj 254 226 select tri;
+#X obj 310 196 symbol;
+#X obj 324 259 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 1
+1;
+#X obj 407 259 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 0
+1;
+#X obj 256 305 line~;
+#X msg 252 280 \$1 100;
+#X obj 324 225 select sine;
+#X obj 407 225 select square;
+#X obj 331 304 line~;
+#X msg 327 279 \$1 100;
+#X obj 410 306 line~;
+#X msg 406 281 \$1 100;
+#X obj 3 308 *~;
+#X obj -45 308 *~;
+#X obj 5 249 phasor~;
+#X obj -3 278 expr~ if($v1>0 \, 1 \, 0);
+#X obj -50 251 osc~;
+#X obj -100 289 expr~ $v1*$v1;
+#X obj 199 24 receive osc;
+#X obj 193 85 routeOSC /mid2;
+#X obj 217 404 dac~;
+#X obj 460 154 routeOSC /pans;
+#X obj 460 195 expr (1-$f1);
+#X msg 455 226 \$1 10;
+#X obj 220 379 *~;
+#X obj 254 350 line~;
+#X msg 507 226 \$1 10;
+#X obj 248 379 *~;
+#X obj 318 354 line~;
+#X obj 67 242 expr~ min(max(1 \, 10*$v1*$v1*$v1) \, -1);
+#X connect 0 0 37 0;
+#X connect 1 0 0 0;
+#X connect 1 0 22 0;
+#X connect 1 0 24 0;
+#X connect 2 0 1 0;
+#X connect 3 0 32 0;
+#X connect 3 0 35 0;
+#X connect 4 0 2 0;
+#X connect 5 0 9 0;
+#X connect 6 0 3 0;
+#X connect 7 0 13 0;
+#X connect 8 0 7 0;
+#X connect 9 0 8 0;
+#X connect 9 0 14 0;
+#X connect 9 0 15 0;
+#X connect 10 0 17 0;
+#X connect 11 0 19 0;
+#X connect 12 0 21 1;
+#X connect 13 0 12 0;
+#X connect 14 0 10 0;
+#X connect 15 0 11 0;
+#X connect 16 0 6 1;
+#X connect 17 0 16 0;
+#X connect 18 0 20 1;
+#X connect 19 0 18 0;
+#X connect 20 0 3 0;
+#X connect 21 0 3 0;
+#X connect 22 0 23 0;
+#X connect 23 0 20 0;
+#X connect 24 0 25 0;
+#X connect 25 0 21 0;
+#X connect 26 0 27 0;
+#X connect 27 0 4 0;
+#X connect 27 0 5 0;
+#X connect 27 0 29 0;
+#X connect 29 0 30 0;
+#X connect 29 0 34 0;
+#X connect 30 0 31 0;
+#X connect 31 0 33 0;
+#X connect 32 0 28 0;
+#X connect 33 0 32 1;
+#X connect 34 0 36 0;
+#X connect 35 0 28 1;
+#X connect 36 0 35 1;
+#X connect 37 0 6 0;
+#X restore 115 229 pd voice;
+#N canvas 757 531 584 408 voice 0;
+#X obj 192 211 osc~;
+#X obj 192 180 line~;
+#X msg 193 150 \$1 10;
+#X obj 192 289 *~ 0.1;
+#X obj 197 119 routeOSC /freq;
+#X obj 300 118 routeOSC /shape;
+#X obj 194 252 *~;
+#X obj 254 260 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 1
+1;
+#X obj 254 226 select tri;
+#X obj 310 196 symbol;
+#X obj 324 259 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 1
+1;
+#X obj 407 259 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 0
+1;
+#X obj 256 305 line~;
+#X msg 252 280 \$1 100;
+#X obj 324 225 select sine;
+#X obj 407 225 select square;
+#X obj 331 304 line~;
+#X msg 327 279 \$1 100;
+#X obj 410 306 line~;
+#X msg 406 281 \$1 100;
+#X obj 127 251 *~;
+#X obj 79 251 *~;
+#X obj 129 192 phasor~;
+#X obj 74 194 osc~;
+#X obj 24 232 expr~ $v1*$v1;
+#X obj 199 24 receive osc;
+#X obj 193 85 routeOSC /mid3;
+#X obj 187 377 dac~;
+#X obj 430 127 routeOSC /pans;
+#X obj 430 168 expr (1-$f1);
+#X msg 425 199 \$1 10;
+#X obj 190 352 *~;
+#X obj 224 323 line~;
+#X msg 477 199 \$1 10;
+#X obj 218 352 *~;
+#X obj 288 327 line~;
+#X obj 121 221 expr~ max(sin($v1) \, cos($v1*$v1));
+#X connect 0 0 6 0;
+#X connect 1 0 0 0;
+#X connect 1 0 22 0;
+#X connect 1 0 23 0;
+#X connect 2 0 1 0;
+#X connect 3 0 31 0;
+#X connect 3 0 34 0;
+#X connect 4 0 2 0;
+#X connect 5 0 9 0;
+#X connect 6 0 3 0;
+#X connect 7 0 13 0;
+#X connect 8 0 7 0;
+#X connect 9 0 8 0;
+#X connect 9 0 14 0;
+#X connect 9 0 15 0;
+#X connect 10 0 17 0;
+#X connect 11 0 19 0;
+#X connect 12 0 21 1;
+#X connect 13 0 12 0;
+#X connect 14 0 10 0;
+#X connect 15 0 11 0;
+#X connect 16 0 6 1;
+#X connect 17 0 16 0;
+#X connect 18 0 20 1;
+#X connect 19 0 18 0;
+#X connect 20 0 3 0;
+#X connect 21 0 3 0;
+#X connect 22 0 36 0;
+#X connect 23 0 24 0;
+#X connect 24 0 21 0;
+#X connect 25 0 26 0;
+#X connect 26 0 4 0;
+#X connect 26 0 5 0;
+#X connect 26 0 28 0;
+#X connect 28 0 29 0;
+#X connect 28 0 33 0;
+#X connect 29 0 30 0;
+#X connect 30 0 32 0;
+#X connect 31 0 27 0;
+#X connect 32 0 31 1;
+#X connect 33 0 35 0;
+#X connect 34 0 27 1;
+#X connect 35 0 34 1;
+#X connect 36 0 20 0;
+#X restore 179 203 pd voice;
+#X obj 428 117 print;
+#N canvas 757 531 584 408 voice 0;
+#X obj 192 211 osc~;
+#X obj 192 180 line~;
+#X msg 193 150 \$1 10;
+#X obj 192 289 *~ 0.1;
+#X obj 187 374 dac~;
+#X obj 197 119 routeOSC /freq;
+#X obj 300 118 routeOSC /shape;
+#X obj 194 252 *~;
+#X obj 254 260 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 1
+1;
+#X obj 254 226 select tri;
+#X obj 310 196 symbol;
+#X obj 324 259 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 1
+1;
+#X obj 407 259 tgl 15 0 empty empty empty 17 7 0 10 -262144 -1 -1 1
+1;
+#X obj 256 305 line~;
+#X msg 252 280 \$1 100;
+#X obj 324 225 select sine;
+#X obj 407 225 select square;
+#X obj 331 304 line~;
+#X msg 327 279 \$1 100;
+#X obj 410 306 line~;
+#X msg 406 281 \$1 100;
+#X obj 127 251 *~;
+#X obj 79 251 *~;
+#X obj 129 192 phasor~;
+#X obj 121 221 expr~ if($v1>0 \, 1 \, 0);
+#X obj 74 194 osc~;
+#X obj 24 232 expr~ $v1*$v1;
+#X obj 199 24 receive osc;
+#X obj 430 124 routeOSC /pans;
+#X obj 430 165 expr (1-$f1);
+#X msg 425 196 \$1 10;
+#X obj 190 349 *~;
+#X obj 224 320 line~;
+#X msg 477 196 \$1 10;
+#X obj 218 349 *~;
+#X obj 288 324 line~;
+#X obj 193 85 routeOSC /bass2;
+#X connect 0 0 7 0;
+#X connect 1 0 0 0;
+#X connect 1 0 23 0;
+#X connect 1 0 25 0;
+#X connect 2 0 1 0;
+#X connect 3 0 31 0;
+#X connect 3 0 34 0;
+#X connect 5 0 2 0;
+#X connect 6 0 10 0;
+#X connect 7 0 3 0;
+#X connect 8 0 14 0;
+#X connect 9 0 8 0;
+#X connect 10 0 9 0;
+#X connect 10 0 15 0;
+#X connect 10 0 16 0;
+#X connect 11 0 18 0;
+#X connect 12 0 20 0;
+#X connect 13 0 22 1;
+#X connect 14 0 13 0;
+#X connect 15 0 11 0;
+#X connect 16 0 12 0;
+#X connect 17 0 7 1;
+#X connect 18 0 17 0;
+#X connect 19 0 21 1;
+#X connect 20 0 19 0;
+#X connect 21 0 3 0;
+#X connect 22 0 3 0;
+#X connect 23 0 24 0;
+#X connect 24 0 21 0;
+#X connect 25 0 26 0;
+#X connect 26 0 22 0;
+#X connect 27 0 36 0;
+#X connect 28 0 29 0;
+#X connect 28 0 33 0;
+#X connect 29 0 30 0;
+#X connect 30 0 32 0;
+#X connect 31 0 4 0;
+#X connect 32 0 31 1;
+#X connect 33 0 35 0;
+#X connect 34 0 4 1;
+#X connect 35 0 34 1;
+#X connect 36 0 5 0;
+#X connect 36 0 6 0;
+#X connect 36 0 28 0;
+#X restore 181 171 pd voice;
+#X connect 1 0 2 0;
+#X connect 2 0 4 0;
+#X connect 2 0 8 0;
