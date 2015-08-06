@@ -2,7 +2,7 @@ import OSC, time, random, itertools
 c = OSC.OSCClient()
 c.connect(('127.0.0.1', 10101))   # connect to PureData
 
-beat_length = 0.75
+beat_length = 0.65
 
 class MarkovChain(object):
 	"""Generate a second-order Markov Chain"""
@@ -135,11 +135,15 @@ class Voice(object):
 		self.setModulationTriggers('note', self.freqs.values)
 		print "***MODULATE NOTES*** %s: %s" % (self.name, self.freqs.values)
 		base_freq_to_change = random.choice(xrange(len(freq_base)))
+		while True:
+			ratio = random.choice(freq_base)/random.choice(freq_base)
+			if ratio > 0.5 and ratio < 2.0:
+				break
 		freq_base[base_freq_to_change] = freq_base[base_freq_to_change]*random.choice(freq_base)/random.choice(freq_base)
 
 	def rotateLengths(self):
 		number_to_rotate = max(random.choice(xrange(len(self.lengths.values) - 2)) + 1, 1)
-		self.lengths.values = self.lengths.values[:-1*number_to_rotate] + [float(random.randint(2,4)*random.choice(self.lengths.values))/float(random.randint(2,4)) for i in xrange(number_to_rotate)]
+		self.lengths.values = self.lengths.values[:-1*number_to_rotate] + [float(random.randint(2,4)*random.choice(self.lengths.values))/float(random.randint(1,3)) for i in xrange(number_to_rotate)]
 		self.setModulationTriggers('length', self.lengths.values)
 		print "***MODULATE LENGTH*** %s: %s" % (self.name, self.lengths.values)
 
@@ -171,11 +175,11 @@ class Voice(object):
 			if self.last_lengths == self.modulation_triggers['length']:
 				self.rotateLengths()
 
-freq_base = [82.407*factor/divisor for factor in [float(f) for f in xrange(5)] for divisor  in [float(d) for d in xrange(5)] if divisor > 0 and ((factor/divisor >= 1 and factor/divisor <= 4) or factor)]
+freq_base = [8.2407*factor/divisor for factor in [float(f) for f in xrange(5)] for divisor  in [float(d) for d in xrange(5)] if divisor > 0 and ((factor/divisor >= 1 and factor/divisor <= 4) or factor)]
 print len(freq_base) 
 
 bass_voice = Voice(
-	freqs = 8,
+	freqs = 6,
 	lengths = [1.0, 0.5, 0.25],
 	pans = [0.4,0.45,0.5,0.55,0.6],
 	shapes = ['square','tri','sine'], 
@@ -185,7 +189,7 @@ bass_voice = Voice(
 
 bass_voice2 = Voice(
 	freqs = 4,
-	lengths = [2.0, 1.5, 1.0f],
+	lengths = [2.0, 1.5, 1.0],
 	pans = [0.4,0.45,0.5,0.55,0.6],
 	shapes = ['square','tri','sine'], 
 	name = "bass2",
@@ -196,7 +200,7 @@ random.shuffle(freq_base)
 
 mid_voice = Voice(
 	freqs = 5,
-	lengths = [1.0, 0.5, 0.25, 0.25,0.125],
+	lengths = [1.0, 0.5, 0.25],
 	shapes = ['square','tri','sine'],
 	pans = [0.2,0.3,0.35,0.4,0.6],
 	name = "mid",
@@ -205,8 +209,8 @@ mid_voice = Voice(
 random.shuffle(freq_base)
 
 mid_voice2 = Voice(
-	freqs = 5,
-	lengths = [1.0, 0.75, 0.6, 0.25],
+	freqs = 4,
+	lengths = [1.0, 0.75, 0.5],
 	shapes = ['square','tri','sine'],
 	pans = [0.4, 0.6, 0.65, 0.7, 0.8],
 	name = "mid2",
@@ -215,8 +219,8 @@ mid_voice2 = Voice(
 random.shuffle(freq_base)
 
 mid_voice3 = Voice(
-	freqs = 7,
-	lengths = [0.8, 0.5, 0.25],
+	freqs = 6,
+	lengths = [0.75, 0.5, 0.25],
 	shapes = ['square','tri','sine'],
 	pans = [0.2, 0.21, 0.69, 0.7],
 	name = "mid3",
